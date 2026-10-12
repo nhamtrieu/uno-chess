@@ -1,0 +1,25 @@
+{
+  "name": "@uno-chess/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@colyseus/core": "^0.18.18",
+    "@colyseus/schema": "^5.0.39",
+    "@colyseus/ws-transport": "^0.18.4",
+    "@uno-chess/core": "workspace:*",
+    "mongodb": "^7.7.0"
+  },
+  "devDependencies": {
+    "@colyseus/sdk": "^0.18.5",
+    "@colyseus/testing": "^0.18.6",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
