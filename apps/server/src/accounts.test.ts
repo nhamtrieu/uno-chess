@@ -28,9 +28,9 @@ describe("accounts", () => {
 
   it("records games and updates Elo and stats", async () => {
     const u = ((await a.login("alice", "secret1")) as any).value;
-    const r = (await a.recordGame(u.id, "Máy tính", 1500, "bot", true))!;
+    const r = (await a.recordGame(u.id, "Máy tính", 1500, "bot", 1))!;
     expect(r.after).toBeGreaterThan(r.before);
-    await a.recordGame(u.id, "Khách", 1200, "online", false);
+    await a.recordGame(u.id, "Khách", 1200, "online", 0);
     const s = await a.statsFor(u.id);
     expect(s.user.games).toBe(2);
     expect(s.user.wins).toBe(1);
@@ -50,7 +50,7 @@ describe("accounts", () => {
   it("stores a replay only for its owner", async () => {
     const u = (await a.register("dave", "secret1")) as any;
     const other = (await a.register("erin", "secret1")) as any;
-    await a.recordGame(u.value.id, "Khách", 1200, "online", true, { frames: JSON.stringify([{ b: "." }]), seat: 1 });
+    await a.recordGame(u.value.id, "Khách", 1200, "online", 1, { frames: JSON.stringify([{ b: "." }]), seat: 1 });
     const row = (await a.statsFor(u.value.id)).recent[0]!;
     expect(row.has_replay).toBe(1);
     const r = (await a.replayFor(u.value.id, row.id))!;

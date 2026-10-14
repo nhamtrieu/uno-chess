@@ -11,5 +11,8 @@
   "devDependencies": {
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "chess.js": "^1.4.0"
   }
 }

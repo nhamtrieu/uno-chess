@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { ObjectId, type WithId } from "mongodb";
+import { TIME_CATEGORIES, tcCategory, type TimeCategory } from "@uno-chess/core";
 import { games, users, type UserDoc } from "./db";
 
 export const START_ELO = 1200;
@@ -16,12 +17,23 @@ export interface User {
   elo: number;
   games: number;
   wins: number;
+  /** Classic-chess rating per time-control category. */
+  ratings: Record<TimeCategory, Rating>;
   created_at: number;
 }
-export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+export interface Rating { elo: number; games: number; wins: number }
+/** Each rating pool: Uno-Chess, or one of the classic-chess time-control categories. */
+export type Variant = "uno" | TimeCategory;
+export const isVariant = (v: unknown): v is Variant => v === "uno" || (TIME_CATEGORIES as string[]).includes(v as string);
+/** `code` is stable and translated by the client; `error` is a Vietnamese fallback message. */
+export type Result<T> = { ok: true; value: T } | { ok: false; error: string; code: string };
 
 const publicUser = (d: WithId<UserDoc>): User => ({
-  id: d._id.toHexString(), username: d.username, elo: d.elo, games: d.games, wins: d.wins, created_at: d.createdAt,
+  id: d._id.toHexString(), username: d.username, elo: d.elo, games: d.games, wins: d.wins,
+  ratings: Object.fromEntries(
+    TIME_CATEGORIES.map((c) => [c, d.ratings?.[c] ?? { elo: START_ELO, games: 0, wins: 0 }]),
+  ) as Record<TimeCategory, Rating>,
+  created_at: d.createdAt,
 });
 
 const hash = (password: string, salt: string) => scryptSync(password, salt, 64).toString("hex");
@@ -59,8 +71,8 @@ const isDuplicate = (e: any) => e?.code === 11000;
 
 export async function register(username: string, password: string): Promise<Result<User>> {
   username = (username ?? "").trim();
-  if (!/^[\p{L}\p{N}_.-]{3,20}$/u.test(username)) return { ok: false, error: "Tên đăng nhập 3–20 ký tự (chữ, số, _ . -)" };
-  if (typeof password !== "string" || password.length < 6 || password.length > 100) return { ok: false, error: "Mật khẩu tối thiểu 6 ký tự" };
+  if (!/^[\p{L}\p{N}_.-]{3,20}$/u.test(username)) return { ok: false, code: "bad_username", error: "Tên đăng nhập 3–20 ký tự (chữ, số, _ . -)" };
+  if (typeof password !== "string" || password.length < 6 || password.length > 100) return { ok: false, code: "bad_password", error: "Mật khẩu tối thiểu 6 ký tự" };
   const salt = randomBytes(16).toString("hex");
   const doc: UserDoc = {
     username, uname: username.toLowerCase(), salt, passHash: hash(password, salt),
@@ -70,70 +82,106 @@ export async function register(username: string, password: string): Promise<Resu
     const r = await (await users()).insertOne(doc);
     return { ok: true, value: publicUser({ ...doc, _id: r.insertedId }) };
   } catch (e) {
-    if (isDuplicate(e)) return { ok: false, error: "Tên đăng nhập đã tồn tại" };
+    if (isDuplicate(e)) return { ok: false, code: "username_taken", error: "Tên đăng nhập đã tồn tại" };
     throw e;
   }
 }
 
 export async function login(username: string, password: string): Promise<Result<User>> {
   const d = await (await users()).findOne({ uname: (username ?? "").trim().toLowerCase() });
-  const bad: Result<User> = { ok: false, error: "Sai tên đăng nhập hoặc mật khẩu" };
+  const bad: Result<User> = { ok: false, code: "bad_credentials", error: "Sai tên đăng nhập hoặc mật khẩu" };
   if (!d || typeof password !== "string" || !d.passHash) return bad; // Google-only accounts have no password
   const a = Buffer.from(hash(password, d.salt)), b = Buffer.from(d.passHash);
   return a.length === b.length && timingSafeEqual(a, b) ? { ok: true, value: publicUser(d) } : bad;
 }
 
-export function eloAfter(elo: number, oppElo: number, won: boolean): number {
+/** `score` is 1 for a win, 0.5 for a draw, 0 for a loss. */
+export function eloAfter(elo: number, oppElo: number, score: number): number {
   const expected = 1 / (1 + 10 ** ((oppElo - elo) / 400));
-  return Math.max(100, Math.round(elo + K * ((won ? 1 : 0) - expected)));
+  return Math.max(100, Math.round(elo + K * (score - expected)));
 }
 
-/** Records one finished game for a user and updates their rating. Returns the new Elo. */
+/** Rating of one pool for a user. */
+const ratingOf = (u: User, variant: Variant): Rating =>
+  variant === "uno" ? { elo: u.elo, games: u.games, wins: u.wins } : u.ratings[variant];
+
+/** Records one finished game for a user and updates their rating in that pool. Returns the new Elo. */
 export async function recordGame(
-  userId: string, opponent: string, opponentElo: number, mode: string, won: boolean,
-  replay?: { frames: string; seat: number },
+  userId: string, opponent: string, opponentElo: number, mode: string, score: number,
+  replay?: { frames: string; seat: number }, variant: Variant = "uno", rated = true, tc?: string,
 ): Promise<{ before: number; after: number } | null> {
   const u = await getUser(userId);
   if (!u) return null;
-  const after = eloAfter(u.elo, opponentElo, won);
-  await (await users()).updateOne({ _id: new ObjectId(userId) }, { $set: { elo: after }, $inc: { games: 1, wins: won ? 1 : 0 } });
+  const before = ratingOf(u, variant).elo;
+  const after = rated ? eloAfter(before, opponentElo, score) : before; // casual games leave ratings alone
+  const won = score === 1;
+  if (rated) {
+    const update =
+      variant === "uno"
+        ? { $set: { elo: after }, $inc: { games: 1, wins: won ? 1 : 0 } }
+        : { $set: { [`ratings.${variant}.elo`]: after }, $inc: { [`ratings.${variant}.games`]: 1, [`ratings.${variant}.wins`]: won ? 1 : 0 } };
+    await (await users()).updateOne({ _id: new ObjectId(userId) }, update);
+  }
   await (await games()).insertOne({
-    userId, opponent, opponentElo, mode, won, eloBefore: u.elo, eloAfter: after, playedAt: Date.now(),
-    mySeat: replay?.seat ?? 0, hasReplay: !!replay, replay: replay?.frames,
+    userId, opponent, opponentElo, mode, won, draw: score === 0.5, rated, tc, eloBefore: before, eloAfter: after,
+    variant: variant === "uno" ? "uno" : "classic", category: variant === "uno" ? undefined : variant,
+    playedAt: Date.now(), mySeat: replay?.seat ?? 0, hasReplay: !!replay, replay: replay?.frames,
   });
-  return { before: u.elo, after };
+  return { before, after };
 }
+
+/** The pool a classic game with this time control is rated in. */
+export const variantForTc = (tc: string): Variant => tcCategory(tc);
 
 // API-facing row shape (snake_case, same as before the move to MongoDB).
 const gameRow = (g: any) => ({
   id: g._id.toHexString(), opponent: g.opponent, opponent_elo: g.opponentElo, mode: g.mode, won: g.won ? 1 : 0,
+  draw: g.draw ? 1 : 0, variant: g.variant ?? "uno", category: g.category ?? null, rated: g.rated === false ? 0 : 1, tc: g.tc ?? null,
   elo_before: g.eloBefore, elo_after: g.eloAfter, played_at: g.playedAt, has_replay: g.hasReplay ? 1 : 0,
 });
 
-export async function statsFor(userId: string) {
+const variantFilter = (variant: Variant) =>
+  variant === "uno" ? { variant: { $ne: "classic" as const } } : { variant: "classic" as const, category: variant };
+
+export async function statsFor(userId: string, variant: Variant = "uno") {
   const g = await games();
-  const user = (await getUser(userId))!;
-  const [recent, byMode, best, ahead] = await Promise.all([
-    g.find({ userId }, { projection: { replay: 0 } }).sort({ playedAt: -1 }).limit(50).toArray(),
-    g.aggregate<{ _id: string; games: number; wins: number }>([
-      { $match: { userId } },
-      { $group: { _id: "$mode", games: { $sum: 1 }, wins: { $sum: { $cond: ["$won", 1, 0] } } } },
+  const full = (await getUser(userId))!;
+  const r = ratingOf(full, variant);
+  // `user` carries the rating of the requested pool in its elo/games/wins fields.
+  const user = variant === "uno" ? full : { ...full, elo: r.elo, games: r.games, wins: r.wins };
+  const match = { userId, rated: { $ne: false }, ...variantFilter(variant) }; // stats ignore casual games
+  const listMatch = { userId, ...variantFilter(variant) };
+  const eloPath = variant === "uno" ? "elo" : `ratings.${variant}.elo`;
+  // players with no games in a pool count as 1200, so they rank ahead of anyone below that
+  const ahead = { $or: [{ [eloPath]: { $gt: user.elo } }, ...(variant !== "uno" && user.elo < START_ELO ? [{ [eloPath]: { $exists: false } }] : [])] };
+  const [recent, byMode, best, rank] = await Promise.all([
+    g.find(listMatch, { projection: { replay: 0 } }).sort({ playedAt: -1 }).limit(50).toArray(),
+    g.aggregate<{ _id: string; games: number; wins: number; draws: number }>([
+      { $match: match },
+      { $group: { _id: "$mode", games: { $sum: 1 }, wins: { $sum: { $cond: ["$won", 1, 0] } }, draws: { $sum: { $cond: ["$draw", 1, 0] } } } },
     ]).toArray(),
-    g.find({ userId }).sort({ eloAfter: -1 }).limit(1).project({ eloAfter: 1 }).toArray(),
-    (await users()).countDocuments({ elo: { $gt: user.elo } }),
+    g.find(match).sort({ eloAfter: -1 }).limit(1).project({ eloAfter: 1 }).toArray(),
+    (await users()).countDocuments(ahead as never),
   ]);
   return {
     user,
+    variant,
     recent: recent.map(gameRow),
     byMode: byMode.map((m) => ({ mode: m._id, games: m.games, wins: m.wins })),
+    draws: byMode.reduce((n, m) => n + m.draws, 0),
     peak: Math.max(best[0]?.eloAfter ?? user.elo, user.elo),
-    rank: ahead + 1,
+    rank: rank + 1,
   };
 }
 
-export async function leaderboard(limit = 20) {
-  const rows = await (await users()).find({ games: { $gt: 0 } }).sort({ elo: -1 }).limit(limit).toArray();
-  return rows.map((u) => ({ username: u.username, elo: u.elo, games: u.games, wins: u.wins }));
+export async function leaderboard(limit = 20, variant: Variant = "uno") {
+  const gamesPath = variant === "uno" ? "games" : `ratings.${variant}.games`;
+  const eloPath = variant === "uno" ? "elo" : `ratings.${variant}.elo`;
+  const rows = await (await users()).find({ [gamesPath]: { $gt: 0 } } as never).sort({ [eloPath]: -1 }).limit(limit).toArray();
+  return rows.map((d) => {
+    const r = ratingOf(publicUser(d), variant);
+    return { username: d.username, elo: r.elo, games: r.games, wins: r.wins };
+  });
 }
 
 /** A finished game with its frames; only its owner may load it. */
@@ -149,18 +197,18 @@ interface GoogleClaims { sub: string; email?: string; name?: string; aud: string
 /** Verifies a Google Identity Services ID token (needs GOOGLE_CLIENT_ID) via Google's tokeninfo endpoint. */
 export async function verifyGoogleToken(idToken: string): Promise<Result<GoogleClaims>> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) return { ok: false, error: "Server chưa cấu hình đăng nhập Google" };
+  if (!clientId) return { ok: false, code: "google_not_configured", error: "Server chưa cấu hình đăng nhập Google" };
   try {
     const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
-    if (!res.ok) return { ok: false, error: "Token Google không hợp lệ" };
+    if (!res.ok) return { ok: false, code: "google_invalid", error: "Token Google không hợp lệ" };
     const c = (await res.json()) as GoogleClaims;
     const issOk = c.iss === "accounts.google.com" || c.iss === "https://accounts.google.com";
     if (c.aud !== clientId || !issOk || !c.sub || Number(c.exp) * 1000 < Date.now()) {
-      return { ok: false, error: "Token Google không hợp lệ" };
+      return { ok: false, code: "google_invalid", error: "Token Google không hợp lệ" };
     }
     return { ok: true, value: c };
   } catch {
-    return { ok: false, error: "Không xác thực được với Google" };
+    return { ok: false, code: "google_unreachable", error: "Không xác thực được với Google" };
   }
 }
 

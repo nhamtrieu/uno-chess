@@ -110,15 +110,19 @@ export class UnoChessRoom extends Room<{ state: GameSchema }> {
     if (this.rated || this.game.winner === null) return;
     this.rated = true;
     const seats: Seat[] = [0, 1];
+    // Read both ratings before recording anything: one player's result must not shift the other's opponent rating.
+    const before = new Map<Seat, Awaited<ReturnType<typeof getUser>>>();
+    for (const seat of seats) {
+      const id = this.accounts.get(seat);
+      before.set(seat, id !== undefined ? await getUser(id) : null);
+    }
     for (const seat of seats) {
       const uid = this.accounts.get(seat);
       if (uid === undefined) continue;
-      const oppSeat = (seat === 0 ? 1 : 0) as Seat;
-      const oppUid = this.accounts.get(oppSeat);
-      const opp = oppUid !== undefined ? await getUser(oppUid) : null;
+      const opp = before.get((seat === 0 ? 1 : 0) as Seat) ?? null;
       const [name, elo] = this.vsBot ? ["Máy tính", BOT_ELO] : opp ? [opp.username, opp.elo] : ["Khách", GUEST_ELO];
       try {
-        const r = await recordGame(uid, name, elo, this.mode, this.game.winner === seat, {
+        const r = await recordGame(uid, name, elo, this.mode, this.game.winner === seat ? 1 : 0, {
           frames: JSON.stringify(this.frames),
           seat,
         });

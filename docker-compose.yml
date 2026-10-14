@@ -1,9 +1,32 @@
-# Local MongoDB for development: `docker compose up -d`
+# Full stack:   docker compose up -d --build
+# With a bundled MongoDB (otherwise set MONGODB_URI in apps/server/.env to your own database):
+#               docker compose --profile local-db up -d --build
 services:
+  server:
+    build: { context: ., target: server }
+    env_file: apps/server/.env # MONGODB_URI, AUTH_SECRET, GOOGLE_CLIENT_ID
+    ports: ["2567:2567"]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      target: web
+      args: # public URLs the *browser* uses to reach the server; see .env.example
+        NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL:-}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
+    ports: ["3000:3000"]
+    depends_on: [server]
+    restart: unless-stopped
+
+  # Optional local database. Point the server at it with MONGODB_URI=mongodb://mongo:27017/uno-chess
   mongo:
+    profiles: [local-db]
     image: mongo:7
-    ports: ["27017:27017"]
+    ports: ["127.0.0.1:27017:27017"]
     volumes: [mongo-data:/data/db]
     restart: unless-stopped
+
 volumes:
   mongo-data:

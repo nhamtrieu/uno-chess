@@ -1,11 +1,12 @@
 import { Client, Room } from "@colyseus/sdk";
 import { getToken } from "./auth";
 
-const ROOM_NAME = "uno_chess";
+const ROOMS = { uno: "uno_chess", classic: "classic_chess" } as const;
+export type GameKind = keyof typeof ROOMS;
 
 function serverUrl() {
   return (
-    process.env.NEXT_PUBLIC_SERVER_URL ??
+    process.env.NEXT_PUBLIC_SERVER_URL ||
     `ws://${typeof window === "undefined" ? "localhost" : window.location.hostname}:2567`
   );
 }
@@ -19,8 +20,10 @@ const client = () => new Client(serverUrl());
 const connections = new Map<string, Promise<Room>>();
 const tokenKey = (id: string) => `uno-chess:token:${id}`;
 
-export function connect(id: string): Promise<Room> {
-  const existing = connections.get(id);
+/** `extra` (classic chess: time control, rated) is sent when this connection creates or matchmakes into a room. */
+export function connect(id: string, kind: GameKind = "uno", extra: Record<string, unknown> = {}): Promise<Room> {
+  const ROOM_NAME = ROOMS[kind];
+  const existing = connections.get(`${kind}:${id}`);
   if (existing) return existing;
 
   const p = (async () => {
@@ -28,11 +31,11 @@ export function connect(id: string): Promise<Room> {
     const token0 = getToken(); // logged-in players get their games rated on the server
     const mode = id.split("-")[0];
     if (mode === "new") {
-      room = await client().create(ROOM_NAME, { private: true, token: token0 });
+      room = await client().create(ROOM_NAME, { ...extra, private: true, token: token0 });
     } else if (mode === "bot") {
-      room = await client().create(ROOM_NAME, { bot: true, token: token0 });
+      room = await client().create(ROOM_NAME, { ...extra, bot: true, token: token0 });
     } else if (mode === "online") {
-      room = await client().joinOrCreate(ROOM_NAME, { token: token0 });
+      room = await client().joinOrCreate(ROOM_NAME, { ...extra, token: token0 });
     } else {
       const token = sessionStorage.getItem(tokenKey(id));
       try {
@@ -45,8 +48,8 @@ export function connect(id: string): Promise<Room> {
     sessionStorage.setItem(tokenKey(room.roomId), room.reconnectionToken);
     return room;
   })();
-  connections.set(id, p);
-  p.catch(() => connections.delete(id));
+  connections.set(`${kind}:${id}`, p);
+  p.catch(() => connections.delete(`${kind}:${id}`));
   return p;
 }
 

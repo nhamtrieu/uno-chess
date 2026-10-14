@@ -2,7 +2,7 @@ packages:
   - "packages/*"
   - "apps/*"
 allowBuilds:
-  esbuild: set this to true or false
-  msgpackr-extract: set this to true or false
+  esbuild: true
+  msgpackr-extract: true
 minimumReleaseAgeExclude:
   - '@colyseus/schema@5.0.39'

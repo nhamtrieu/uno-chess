@@ -1,15 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { TimeCategory } from "@uno-chess/core";
 
-export interface User { id: string; username: string; elo: number; games: number; wins: number; created_at: number }
-export interface GameRow { id: string; opponent: string; opponent_elo: number; mode: string; won: number; elo_before: number; elo_after: number; played_at: number; has_replay?: number }
-export interface Stats { user: User; recent: GameRow[]; byMode: { mode: string; games: number; wins: number }[]; peak: number; rank: number }
+export interface User { id: string; username: string; elo: number; games: number; wins: number; ratings: Record<TimeCategory, { elo: number; games: number; wins: number }>; created_at: number }
+/** A rating pool: Uno-Chess, or a classic-chess time-control category. */
+export type Variant = "uno" | TimeCategory;
+export interface GameRow { id: string; opponent: string; opponent_elo: number; mode: string; won: number; elo_before: number; elo_after: number; played_at: number; has_replay?: number; draw?: number; variant?: "uno" | "classic"; category?: TimeCategory | null; rated?: number; tc?: string | null }
+export interface Stats { variant: Variant; draws: number; user: User; recent: GameRow[]; byMode: { mode: string; games: number; wins: number }[]; peak: number; rank: number }
 
 const TOKEN_KEY = "uno-chess:auth";
 
 export const apiUrl = () =>
-  process.env.NEXT_PUBLIC_API_URL ??
+  process.env.NEXT_PUBLIC_API_URL ||
   `http://${typeof window === "undefined" ? "localhost" : window.location.hostname}:2567`;
 
 export const getToken = () => {
@@ -28,7 +31,7 @@ export async function api<T>(path: string, init?: { method?: string; body?: unkn
     body: init?.body ? JSON.stringify(init.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error ?? "Lỗi kết nối"), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error ?? "Request failed"), { status: res.status, code: data.code as string | undefined });
   return data as T;
 }
 

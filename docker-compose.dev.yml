@@ -1,0 +1,37 @@
+# Development with hot reload:  docker compose -f docker-compose.dev.yml up --build
+# Source is bind-mounted; the web runs `next dev` and the server `tsx watch`.
+# (docker-compose.yml is the production setup: it bakes the code into the images.)
+x-source: &source
+  build: { context: ., target: source }
+  volumes:
+    - ./apps:/app/apps
+    - ./packages:/app/packages
+    - ./package.json:/app/package.json
+    - ./pnpm-lock.yaml:/app/pnpm-lock.yaml
+    - ./pnpm-workspace.yaml:/app/pnpm-workspace.yaml
+    # keep the container's installed dependencies instead of the host's
+    - /app/node_modules
+    - /app/apps/web/node_modules
+    - /app/apps/server/node_modules
+    - /app/packages/core/node_modules
+    - /app/apps/web/.next
+
+services:
+  server:
+    <<: *source
+    # `pnpm install` first so a dependency added since the image was built is picked up on restart
+    command: ["sh", "-c", "pnpm install --frozen-lockfile && exec pnpm --filter @uno-chess/server dev"]
+    env_file: apps/server/.env
+    ports: ["2567:2567"]
+
+  web:
+    <<: *source
+    # webpack, because Turbopack ignores WATCHPACK_POLLING
+    command: ["sh", "-c", "pnpm install --frozen-lockfile && exec pnpm --filter @uno-chess/web exec next dev --webpack -p 3000"]
+    environment:
+      NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL:-}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
+      WATCHPACK_POLLING: "true" # file events do not cross into containers on macOS/Windows
+    ports: ["3000:3000"]
+    depends_on: [server]

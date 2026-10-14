@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Piece } from "@uno-chess/core";
+import { useT } from "@/lib/i18n";
 
 // Solid glyphs for both colours; the colour/outline comes from CSS.
 const GLYPH: Record<string, string> = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟" };
@@ -26,9 +27,13 @@ interface Props {
   onSquare: (sq: number) => void;
   /** Squares whose piece may be picked up and dragged. Clicking still works everywhere. */
   canDrag?: (sq: number) => boolean;
+  /** Squares of the last move (tinted), and a king square to flag as in check. */
+  trail?: number[];
+  check?: number;
 }
 
-export default function Board({ pieces, perspective, selected, targets, activeSq, onSquare, canDrag }: Props) {
+export default function Board({ pieces, perspective, selected, targets, activeSq, onSquare, canDrag, trail, check }: Props) {
+  const { t } = useT();
   const [drag, setDrag] = useState<{ from: number; glyph: string; color: string; x: number; y: number } | null>(null);
   const [arrows, setArrows] = useState<Arrow[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
@@ -131,6 +136,8 @@ export default function Board({ pieces, perspective, selected, targets, activeSq
             (r + f) % 2 === 0 ? "dark" : "light",
             sq === selected ? "selected" : "",
             sq === activeSq ? "active" : "",
+            trail?.includes(sq) ? "trail" : "",
+            sq === check ? "check" : "",
             targets.includes(sq) ? (p ? "target capture" : "target") : "",
           ].join(" ");
           return (
@@ -143,7 +150,7 @@ export default function Board({ pieces, perspective, selected, targets, activeSq
                 if (e.button === 2) rpress.current = { from: sq, tint: tintOf(e) };
                 else if (p) startDrag(e, sq, p);
               }}
-              aria-label={`ô ${FILES[f]}${r + 1}`}
+              aria-label={t("game.square", { sq: `${FILES[f]}${r + 1}` })}
             >
               {fi === 0 && <span className="coord rank">{r + 1}</span>}
               {ri === 7 && <span className="coord file">{FILES[f]}</span>}

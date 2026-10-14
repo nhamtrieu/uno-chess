@@ -8,6 +8,7 @@ import Board from "./Board";
 import Card from "./Card";
 import Brand from "./Brand";
 import { useAuth } from "@/lib/auth";
+import { gameError, useT, type Key } from "@/lib/i18n";
 import { BOT_ELO, beep, eloAfter, useProfile } from "@/lib/profile";
 
 type SyncedPiece = Piece & { sq: number };
@@ -33,9 +34,6 @@ interface Snap {
   pieces: SyncedPiece[];
 }
 
-const PIECE_NAME: Record<string, string> = {
-  K: "Vua", Q: "Hậu", R: "Xe", B: "Tượng", N: "Mã", P: "Tốt",
-};
 const GLYPH: Record<string, string> = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟" };
 
 /** Null until the first state patch arrives (right after joining, `pieces` is still undefined). */
@@ -59,6 +57,7 @@ export default function Game({ roomId }: { roomId: string }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [reviveId, setReviveId] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const { t } = useT();
   const { profile, update } = useProfile();
   const { user, refresh } = useAuth();
   const [eloDelta, setEloDelta] = useState<number | null>(null);
@@ -76,15 +75,15 @@ export default function Game({ roomId }: { roomId: string }) {
           const next = snapshot(s);
           if (next) setSnap(next);
         });
-        off.push(r.onMessage("error", (m: string) => setToast(m)));
+        off.push(r.onMessage("error", (m: string) => setToast(gameError(t, m))));
         off.push(r.onMessage("rated", (m: { before: number; after: number }) => {
           rated.current = true; // the server already rated this game
           setEloDelta(m.after - m.before);
           void refresh();
         }));
-        r.onLeave(() => setError("Mất kết nối tới phòng."));
+        r.onLeave(() => setError(t("game.connectionLost")));
       })
-      .catch((e) => !dead && setError(`Không vào được phòng: ${e?.message ?? e}`));
+      .catch((e) => !dead && setError(t("game.cannotJoin", { msg: e?.message ?? String(e) })));
     return () => {
       dead = true;
       off.forEach((f) => f());
@@ -117,10 +116,11 @@ export default function Game({ roomId }: { roomId: string }) {
   useEffect(() => {
     if (!snap || snap.status !== "over" || rated.current || user !== null) return; // logged-in games are rated by the server
     rated.current = true;
-    const won = snap.winner === mySeat;
+    const score = snap.winner === mySeat ? 1 : 0;
+    const won = score === 1;
     const opp = snap.player1 === "bot" || snap.player0 === "bot" ? BOT_ELO : 1200;
     update((p) => {
-      const elo = eloAfter(p.elo, opp, won);
+      const elo = eloAfter(p.elo, opp, score);
       setEloDelta(elo - p.elo);
       return { elo, games: p.games + 1, wins: p.wins + (won ? 1 : 0) };
     });
@@ -172,8 +172,8 @@ export default function Game({ roomId }: { roomId: string }) {
     }
   };
 
-  if (error) return <main className="lobby"><p className="error">{error}</p><a href="/">Về trang chủ</a></main>;
-  if (!snap || !room) return <main className="lobby"><p className="muted">Đang kết nối…</p></main>;
+  if (error) return <main className="lobby"><p className="error">{error}</p><a href="/">{t("common.home")}</a></main>;
+  if (!snap || !room) return <main className="lobby"><p className="muted">{t("common.connecting")}</p></main>;
 
   // Time bank per seat: the side to move counts down live, the other side is frozen.
   const bank = (seat: 0 | 1) => {
@@ -189,24 +189,26 @@ export default function Game({ roomId }: { roomId: string }) {
   const myMs = bank(mySeat as 0 | 1);
   const oppMs = bank(oppSeat);
   const status = (() => {
-    if (snap.status === "waiting") return "Đang chờ đối thủ… Gửi link hoặc mã phòng cho bạn bè.";
+    if (snap.status === "waiting") return t("game.waiting");
     if (snap.status === "over")
-      return (snap.winner === mySeat ? "🎉 Bạn thắng!" : "Bạn thua.") + (eloDelta !== null ? ` (${eloDelta >= 0 ? "+" : ""}${eloDelta} Elo)` : "");
-    if (!myTurn) return "Lượt của đối thủ";
+      return (snap.winner === mySeat ? t("game.won") : t("game.lost")) + (eloDelta !== null ? ` (${eloDelta >= 0 ? "+" : ""}${eloDelta} Elo)` : "");
+    if (!myTurn) return t("game.theirTurn");
     switch (snap.phase) {
-      case "flip": return "Lượt của bạn — hãy lật bài";
-      case "move": return `Còn tối đa ${snap.movesLeft} nước — chọn quân bất kỳ rồi chọn nước đi`;
-      case "revive": return `Hồi sinh còn tối đa ${snap.reviveLeft} quân — chọn quân rồi chọn ô`;
-      case "wild": return "Wild! Chọn số nước đi (1–9)";
+      case "flip": return t("game.flip");
+      case "move": return t("game.move", { n: snap.movesLeft });
+      case "revive": return t("game.revive", { n: snap.reviveLeft });
+      case "wild": return t("game.wild");
       default: return "";
     }
   })();
+  const myColorName = t(myColor === "w" ? "common.white" : "common.black");
+  const oppColorName = t(myColor === "w" ? "common.black" : "common.white");
   const myCaptured = captured.filter((p) => p.color === myColor);
   const theirCaptured = captured.filter((p) => p.color !== myColor);
   const playing = snap.status === "playing";
 
   const Chip = ({ p, button }: { p: SyncedPiece; button?: boolean }) => {
-    const inner = <><span className={`pc ${p.color}`}>{GLYPH[p.type]}</span>{PIECE_NAME[p.type]}</>;
+    const inner = <><span className={`pc ${p.color}`}>{GLYPH[p.type]}</span>{t(`piece.${p.type}` as Key)}</>;
     return button ? (
       <button
         className={reviveId === p.id ? "chip on" : "chip"}
@@ -218,17 +220,17 @@ export default function Game({ roomId }: { roomId: string }) {
 
   return (
     <>
-      <Brand right={<span className="pill gold">Phòng <code>{room.roomId}</code></span>} />
+      <Brand right={<span className="pill gold">{t("game.room")} <code>{room.roomId}</code></span>} />
       <main className="arena">
         <aside className="wing">
           <section className="panel glass">
-            <h3>Hộp quân cờ đã mất</h3>
-            <div className="label" style={{ marginBottom: 8 }}>Quân của bạn ({myColor === "w" ? "Trắng" : "Đen"})</div>
+            <h3>{t("game.lostPieces")}</h3>
+            <div className="label" style={{ marginBottom: 8 }}>{t("game.yourPieces", { color: myColorName })}</div>
             <div className="chips">
               {myCaptured.length === 0 && <span className="muted">—</span>}
               {myCaptured.map((p) => <Chip key={p.id} p={p} button />)}
             </div>
-            <div className="label" style={{ marginBottom: 8 }}>Quân đối thủ</div>
+            <div className="label" style={{ marginBottom: 8 }}>{t("game.theirPieces")}</div>
             <div className="chips" style={{ marginBottom: 0 }}>
               {theirCaptured.length === 0 && <span className="muted">—</span>}
               {theirCaptured.map((p) => <Chip key={p.id} p={p} />)}
@@ -239,7 +241,7 @@ export default function Game({ roomId }: { roomId: string }) {
               className="gold"
               onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/room/${room.roomId}`)}
             >
-              Sao chép link mời
+              {t("game.copyLink")}
             </button>
           )}
         </aside>
@@ -264,37 +266,37 @@ export default function Game({ roomId }: { roomId: string }) {
         <aside className="wing">
           <section className="panel glass">
             <div className="clock-head">
-              <span className="label">⏱ Đồng hồ thi đấu</span>
+              <span className="label">{t("game.clocks")}</span>
               <span className="label" style={{ color: "var(--gold)" }}>Blitz 05:00</span>
             </div>
             <div className="clocks">
               {([
-                { ms: oppMs, who: `Đối thủ (${myColor === "w" ? "Đen" : "Trắng"})`, mine: false, active: playing && snap.turn === oppSeat },
-                { ms: myMs, who: `Bạn (${myColor === "w" ? "Trắng" : "Đen"})`, mine: true, active: playing && myTurn },
+                { ms: oppMs, who: t("game.opp", { color: oppColorName }), mine: false, active: playing && snap.turn === oppSeat },
+                { ms: myMs, who: t("game.me", { color: myColorName }), mine: true, active: playing && myTurn },
               ]).map((c) => (
                 <div key={c.who} className={`clock ${c.active ? "mine" : ""} ${c.active && c.ms <= 10_000 ? "hazard" : ""} ${playing && c.ms === 0 ? "flag" : ""}`}>
                   <div className="label">{c.who}</div>
                   <div className="time">{playing || snap.status === "over" ? fmt(c.ms) : "--:--"}</div>
-                  <div className="label">{!playing ? "" : c.active ? (c.mine ? "Lượt của bạn" : "Đang nghĩ…") : "Tạm dừng"}</div>
+                  <div className="label">{!playing ? "" : c.active ? (c.mine ? t("game.yourTurnShort") : t("game.thinking")) : t("game.paused")}</div>
                 </div>
               ))}
             </div>
-            <div className="stat" style={{ marginTop: 10 }}><span className="muted">Bạn cầm</span><b>{myColor === "w" ? "Trắng" : "Đen"}</b></div>
-            <div className="stat"><span className="muted">Bài còn</span><b>{snap.deckCount}</b></div>
+            <div className="stat" style={{ marginTop: 10 }}><span className="muted">{t("game.youPlay")}</span><b>{myColorName}</b></div>
+            <div className="stat"><span className="muted">{t("game.deck")}</span><b>{snap.deckCount}</b></div>
           </section>
 
           <section className="panel glass">
-            <div className="label" style={{ marginBottom: 10 }}>Lá bài vừa lật</div>
-            <Card label={snap.lastCard} />
+            <div className="label" style={{ marginBottom: 10 }}>{t("game.lastCard")}</div>
+            <Card label={snap.lastCard} flipKey={snap.flipCount} />
           </section>
 
           <section className="panel glass actions">
-            <div className="label">Bảng điều khiển lượt</div>
+            <div className="label">{t("game.controls")}</div>
             {myTurn && snap.phase === "flip" && (
-              <button className="primary" onClick={() => send("flip")}>Lật bài</button>
+              <button className="primary" onClick={() => send("flip")}>{t("game.flipBtn")}</button>
             )}
             {myTurn && (snap.phase === "move" || snap.phase === "revive") && (
-              <button className="primary" onClick={() => send("endTurn")}>Kết thúc lượt</button>
+              <button className="primary" onClick={() => send("endTurn")}>{t("game.endTurn")}</button>
             )}
             {myTurn && snap.phase === "wild" && (
               <div className="wild">
@@ -303,11 +305,11 @@ export default function Game({ roomId }: { roomId: string }) {
                 ))}
               </div>
             )}
-            {!(myTurn && snap.status === "playing") && <span className="muted">Chưa đến lượt bạn.</span>}
+            {!(myTurn && snap.status === "playing") && <span className="muted">{t("game.notYourTurn")}</span>}
           </section>
         </aside>
       </main>
-      <footer className="foot"><span><b>Grandmaster Gambit</b> v1.0</span><span>Bài còn {snap.deckCount} lá</span></footer>
+      <footer className="foot"><span><b>Grandmaster Gambit</b> v1.0</span><span>{t("footer.deckLeft", { n: snap.deckCount })}</span></footer>
       {toast && <div className="toast">{toast}</div>}
     </>
   );

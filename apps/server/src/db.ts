@@ -9,6 +9,8 @@ export interface UserDoc {
   elo: number;
   games: number;
   wins: number;
+  /** Classic-chess ratings, one per time-control category; a missing entry means 1200 / 0 / 0. */
+  ratings?: Partial<Record<"bullet" | "blitz" | "rapid", { elo: number; games: number; wins: number }>>;
   createdAt: number;
 }
 
@@ -18,6 +20,15 @@ export interface GameDoc {
   opponentElo: number;
   mode: string;
   won: boolean;
+  draw?: boolean;
+  /** "classic" for standard chess; absent means Uno-Chess. */
+  variant?: "uno" | "classic";
+  /** Classic games only: the rating pool the game belongs to. */
+  category?: "bullet" | "blitz" | "rapid";
+  /** false for casual games: they are kept in the history but do not change any rating. Absent = rated. */
+  rated?: boolean;
+  /** Time control of classic games, e.g. "10+5". */
+  tc?: string;
   eloBefore: number;
   eloAfter: number;
   playedAt: number;
@@ -40,6 +51,9 @@ export function getDb(): Promise<Db> {
       d.collection("users").createIndex({ uname: 1 }, { unique: true }),
       d.collection("users").createIndex({ googleSub: 1 }, { unique: true, sparse: true }),
       d.collection("users").createIndex({ elo: -1 }),
+      d.collection("users").createIndex({ "ratings.bullet.elo": -1 }),
+      d.collection("users").createIndex({ "ratings.blitz.elo": -1 }),
+      d.collection("users").createIndex({ "ratings.rapid.elo": -1 }),
       d.collection("games").createIndex({ userId: 1, playedAt: -1 }),
     ]);
     return d;
